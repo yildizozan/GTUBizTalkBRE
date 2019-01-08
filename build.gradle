@@ -1,0 +1,33 @@
+plugins {
+    id 'java'
+}
+
+version '1.0-SNAPSHOT'
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testCompile group: 'junit', name: 'junit', version: '4.12'
+    testCompile "io.vertx:vertx-unit:3.6.2"
+    testCompile "org.junit.jupiter:junit-jupiter-api:5.3.2"
+
+    // https://mvnrepository.com/artifact/io.vertx/vertx-core
+    compile group: 'io.vertx', name: 'vertx-core', version: '3.6.2'
+
+    // https://mvnrepository.com/artifact/io.vertx/vertx-web
+    compile group: 'io.vertx', name: 'vertx-web', version: '3.6.2'
+
+    compile 'io.vertx:vertx-mysql-postgresql-client:3.6.2'
+    
+    compile 'io.vertx:vertx-redis-client:3.6.2'
+
+    // https://mvnrepository.com/artifact/org.slf4j/slf4j-simple
+    testCompile group: 'org.slf4j', name: 'slf4j-simple', version: '1.7.25'
+
+    // https://mvnrepository.com/artifact/org.slf4j/slf4j-api
+    compile group: 'org.slf4j', name: 'slf4j-api', version: '1.7.25'
+}
