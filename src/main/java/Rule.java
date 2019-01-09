@@ -33,7 +33,8 @@ public class Rule {
 
 				this.setId(eElement.getAttribute("id"));
 				this.setClause(eElement.getElementsByTagName("clause").item(0).getTextContent());
-				this.setRelatives(eElement.getElementsByTagName("relatives").item(0).getTextContent());
+//				this.setClause("(" + eElement.getElementsByTagName("clause").item(0).getTextContent() + ")");
+				this.setRelatives("(" + eElement.getElementsByTagName("relatives").item(0).getTextContent() + ")");
 
 			}
 		}

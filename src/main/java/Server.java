@@ -19,9 +19,12 @@ import org.xml.sax.SAXException;
 
 import javax.xml.parsers.ParserConfigurationException;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
 
 public class Server extends AbstractVerticle {
+
+	HashMap<String , String> rules = new HashMap<String, String>();
 
 	private RedisClient redisClient;
 	private Future<Void> future;
@@ -76,10 +79,11 @@ public class Server extends AbstractVerticle {
 				routingContext.next();
 			}
 		})).failureHandler(routingContext -> {
-			System.out.println(routingContext.failed());
+			System.out.println("failureHandler err " + routingContext.failed());
 			SQLConnection conn = routingContext.get("conn");
 			if (conn != null) {
 				conn.close(v -> {
+					routingContext.response().setStatusCode(500).end("<result>err conn</result>");
 				});
 			}
 		});
@@ -171,6 +175,15 @@ public class Server extends AbstractVerticle {
 			return;
 		}
 
+		Business business = new Business();
+		final String result = business.firstCheck(rule.getClause(), rule.getRelatives());
+		System.out.println(rule.getRelatives());
+		System.out.println(result);
+		if (!result.equals("true")) {
+			rc.response().setStatusCode(400).end("<result id='24'>" + result + "</result>");
+			return;
+		}
+
 		String queryCheck = "SELECT * FROM public.rules WHERE rule_id = ?";
 		JsonArray queryCheckParams = new JsonArray();
 		queryCheckParams.add(rule.getId());
@@ -234,59 +247,66 @@ public class Server extends AbstractVerticle {
 		params.add(resp.getUserID());
 		params.add(resp.getAnswer());
 
-		JsonArray paramsForGet = new JsonArray();
-		paramsForGet.add(resp.getRuleID());
+		JsonArray paramsForGetAnswers = new JsonArray();
+		paramsForGetAnswers.add(resp.getRuleID());
 
 		String query = "INSERT INTO public.responses (rule_id, user_id, answer) VALUES (?, ?, ?)";
 		conn.queryWithParams(query, params, resInsert -> {
-//			this.future.fail(resInsert.cause());
 			if (resInsert.succeeded()) {
 
 				// Tüm cevaplar db'den çekilecek.
 				String queryGetAllResponses = "SELECT rule_id, user_id, answer FROM public.responses WHERE rule_id = ?";
-				conn.queryWithParams(queryGetAllResponses, paramsForGet, resGetAnsAll -> {
-//					this.future.fail(resGetAll.cause());
+				conn.queryWithParams(queryGetAllResponses, paramsForGetAnswers, resGetAnsAll -> {
+					System.out.println("Rule: " + resGetAnsAll.result().getRows().get(0).toString());
 					if (resGetAnsAll.succeeded()) {
 
 						// Rule db'den çekilecek.
 						String queryGetRule = "SELECT rule_id, clause, relatives FROM public.rules WHERE rule_id = ? LIMIT 1";
-						conn.queryWithParams(queryGetRule, paramsForGet, resGetRule -> {
+						conn.queryWithParams(queryGetRule, paramsForGetAnswers, resGetRule -> {
 							if (resGetRule.succeeded()) {
 
 								JsonObject rule = resGetRule.result().getRows().get(0); // OK
-								List<JsonObject> responses = resGetRule.result().getRows();
+								List<JsonObject> responses = resGetAnsAll.result().getRows();
+								System.out.println(responses); // Checkpoint responses
 
 								// Calculation.
 								Business business = new Business();
-//								bre.rule = rule.getString("clause");
 
-								for (JsonObject respons : responses) {
-									System.out.println(respons);
-
+								String result = "f";
+								for (JsonObject rsp : responses) {
+									System.out.println(rsp); // Checkpoint response
 									business.rule = rule.getString("clause");
-									String userID = respons.getString("user_id");
-									String answer = respons.getString("answer");
-									String ruleID = respons.getString("rule_id");
-									business.solver(userID, answer, ruleID);
 
+									String userID = rsp.getString("user_id");
+									String answer = rsp.getString("answer");
+									String ruleID = rsp.getString("rule_id");
+
+									result = business.solver(userID, answer);
+									rules.put(ruleID, business.rule);
+
+									System.out.println(result);
 									System.out.println(business.rule);
 								}
 
-								rc.response().setStatusCode(200).end("<result>true</result>");
+								rc.response().setStatusCode(200).end("<result>" + result + "</result>");
+								return;
 							} else {
 								// DB'den tüm veriler çekilemedi demektir.
 								rc.response().setStatusCode(500).end("<result>false</result>");
+								return;
 							}
 						});
 					} else {
 						// DB'den tüm veriler çekilemedi demektir.
 						rc.response().setStatusCode(500).end("<result>false</result>");
+						return;
 					}
 				});
 
 			} else {
 				// Failed!
 				rc.response().setStatusCode(400).end("<result>false</result>");
+				return;
 			}
 		});
 	}

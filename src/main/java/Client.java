@@ -12,7 +12,7 @@ public class Client extends AbstractVerticle {
 
 	public static void main(String[] args) {
 
-
+// Ozsc4lem.7
 //		HttpRequest request = HttpRequest.newBuilder()
 //				.uri(URI.create("http://openjdk.java.net/"))
 //				.timeout(Duration.ofMinutes(1))
