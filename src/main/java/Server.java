@@ -22,6 +22,35 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 
+/*
+create table responses
+(
+	id uuid default uuid_generate_v4() not null
+		constraint responses_pk
+			primary key,
+	rule_id text not null,
+	user_id text not null,
+	answer varchar(1) default 'f'::character varying not null
+);
+
+alter table responses owner to postgres;
+
+
+create table rules
+(
+	id uuid default uuid_generate_v4() not null
+		constraint rules_pk
+			primary key,
+	rule_id text not null,
+	clause text not null,
+	relatives text not null,
+	created_at timestamp default now() not null
+);
+
+alter table rules owner to postgres;
+
+
+ */
 public class Server extends AbstractVerticle {
 
 	HashMap<String , String> rules = new HashMap<String, String>();
