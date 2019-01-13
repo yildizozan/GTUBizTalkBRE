@@ -131,11 +131,11 @@ public class Business {
 		setSolverResult(obje.theLoop(rule));
 		switch (getSolverResult()) {
 			case 0:
-				return "f";
+				return "F";
 			case 1:
-				return "t";
+				return "T";
 			case 2:
-				return "x";
+				return "X";
 
 		}
 		//System.out.println(rule.get((Integer.parseInt(ruleID))));

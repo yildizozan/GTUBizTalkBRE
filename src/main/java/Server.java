@@ -1,343 +1,247 @@
 import SatSolver.Business;
 import SatSolver.Response;
+import com.mysql.jdbc.JDBC4PreparedStatement;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
-import io.vertx.core.VertxOptions;
 import io.vertx.core.http.HttpServerResponse;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
-import io.vertx.ext.asyncsql.PostgreSQLClient;
-import io.vertx.ext.sql.SQLClient;
-import io.vertx.ext.sql.SQLConnection;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
-import io.vertx.redis.RedisClient;
-import io.vertx.redis.RedisOptions;
 import org.xml.sax.SAXException;
 
 import javax.xml.parsers.ParserConfigurationException;
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.List;
+import java.sql.*;
 
-/*
-create table responses
-(
-	id uuid default uuid_generate_v4() not null
-		constraint responses_pk
-			primary key,
-	rule_id text not null,
-	user_id text not null,
-	answer varchar(1) default 'f'::character varying not null
-);
+import static java.sql.Statement.RETURN_GENERATED_KEYS;
 
-alter table responses owner to postgres;
-
-
-create table rules
-(
-	id uuid default uuid_generate_v4() not null
-		constraint rules_pk
-			primary key,
-	rule_id text not null,
-	clause text not null,
-	relatives text not null,
-	created_at timestamp default now() not null
-);
-
-alter table rules owner to postgres;
-
-
- */
 public class Server extends AbstractVerticle {
 
-	HashMap<String , String> rules = new HashMap<String, String>();
+    private static Connection dbConnection;
+    private String dbUrl = "jdbc:mysql://localhost:3306/";
+    private String userName = "root";
+    private String password = "my-secret-pw";
+    private String driver = "com.mysql.jdbc.Driver";
 
-	private RedisClient redisClient;
-	private Future<Void> future;
+    public Connection createConnection() {
 
-	public static void main(String[] args) {
-		VertxOptions vxOptions = new VertxOptions()
-				.setBlockedThreadCheckInterval(200000000);
+        Connection con = null;
+        try {
+            Class.forName(driver);
 
-		Vertx vertx = Vertx.vertx();
-		vertx.deployVerticle(new Server());
-	}
+            con = DriverManager.getConnection(dbUrl, userName, password);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return con;
+    }
 
-	@Override
-	public void start(Future<Void> future) {
+    @Override
+    public void start(Future<Void> future) {
+        dbConnection = createConnection();
 
-		this.future = future;
-
-		Server that = this;
-
-		// DB
-		final JsonObject configs = new JsonObject();
-		configs.put("host", "localhost");
-		configs.put("port", 5432);
-		configs.put("username", "postgres");
-		configs.put("password", "mysecretpassword");
-		configs.put("database", "postgres");
-		final SQLClient sqlClient = PostgreSQLClient.createShared(vertx, configs);
+        // Create DBs
 
 
-		// Cacher server
-		RedisOptions job = new RedisOptions().setHost("localhost").setPort(6379);
-		redisClient = RedisClient.create(vertx, job);
+        Router router = Router.router(vertx);
 
-		Router router = Router.router(vertx);
+        // Middleware for request body parsing
+        router.route().handler(BodyHandler.create());
 
-		// Middleware for db connection
-		router.route().handler(routingContext -> sqlClient.getConnection(res -> {
-			if (res.failed()) {
-				routingContext.fail(res.cause());
-			} else {
-				SQLConnection conn = res.result();
+        router.put("/rule").handler(this::handlePutRole);
+        router.put("/rule/answer").handler(this::handlePutAnswer);
 
-				// save the connection on the context
-				routingContext.put("conn", conn);
+        vertx.createHttpServer().requestHandler(router).listen(3000);
+    }
 
-				// we need to return the connection back to the jdbc pool. In order to do that we need to close it, to keep
-				// the remaining code readable one can add a headers end handler to close the connection.
-				routingContext.addHeadersEndHandler(done -> conn.close(v -> {
-				}));
+    private void handlePutRole(RoutingContext rc) {
 
-				System.out.println("DB connected!");
-				routingContext.next();
-			}
-		})).failureHandler(routingContext -> {
-			System.out.println("failureHandler err " + routingContext.failed());
-			SQLConnection conn = routingContext.get("conn");
-			if (conn != null) {
-				conn.close(v -> {
-					routingContext.response().setStatusCode(500).end("<result>err conn</result>");
-				});
-			}
-		});
+        // This handler will be called for every request
+        HttpServerResponse response = rc.response();
+        response.putHeader("content-type", "application/xml");
 
-		// Middleware for cache server
-		router.route().handler(RoutingContext::next);
+        // Gelen http isteğindeki xml ifadeyi string olarak alıyoruz
+        String body = rc.getBodyAsString();
 
-		// Middleware for request body parsing
-		router.route().handler(BodyHandler.create());
+        if (body == null) {
+            rc.response().setStatusCode(400).end("F");
+            return;
+        }
 
-		router.put("/rule").handler(that::handlePutRole);
-		router.put("/rule/answer").handler(that::handlePutAnswer);
+        // String olarak almış olduğumuz xml ifadeyi parse edilmesi için rule objemize veriyoruz.
+        Rule rule = new Rule();
+        try {
+            rule.setFromXML(body);
+            System.out.println(rule);
+        } catch (ParserConfigurationException | IOException | SAXException e) {
+            e.printStackTrace();
+            rc.response().setStatusCode(400).end("F");
+            return;
+        }
 
-//		router.route().method(HttpMethod.PUT).path("/rule").handler(rc -> {
-//
-//			// This handler will be called for every request
-//			HttpServerResponse response = rc.response();
-//			response.putHeader("content-type", "application/xml");
-//
-//			// Gelen http isteğindeki xml ifadeyi string olarak alıyoruz
-//			String body = rc.getBodyAsString();
-//
-//			// String olarak almış olduğumuz xml ifadeyi parse edilmesi için rule objemize veriyoruz.
-//			Rule rule = new Rule(body);
-//
-//			if (body != null) {
-//				String query = "INSERT INTO public.rules (id, rule_id, clause, relatives) VALUES (DEFAULT, ?, ?, ?)";
-//				JsonArray params = new JsonArray();
-//				params.add(rule.getId());
-//				params.add(rule.getClause());
-//				params.add(rule.getRelatives());
-//
-//				client.queryWithParams(query, params, res -> {
-//					if (res.succeeded()) {
-//						// Success!
-//						rc.response().setStatusCode(201).end("<result>true</result>");
-//					} else {
-//						// Failed!
-//						rc.response().setStatusCode(400).end("<result>false</result>");
-//					}
-//				});
-//			} else {
-//				rc.response().setStatusCode(400).end("<result>false</result>");
-//			}
-//
-//
-//		});
-//
-//		router.route().method(HttpMethod.POST).path("/answer").handler(routingContext -> {
-//
-//			// This handler will be called for every request
-//			HttpServerResponse response = routingContext.response();
-//			response.putHeader("content-type", "application/xml");
-//
-//			// Write to the response and end it
-//			response.end("<job>true</job>");
-//		});
+        Business business = new Business();
+        final String result = business.firstCheck(rule.getClause(), rule.getRelatives());
+        System.out.println(rule.getRelatives());
+        System.out.println(result);
+        if (!result.equals("true")) {
+            rc.response().setStatusCode(400).end( result);
+            return;
+        }
 
 
-		vertx.createHttpServer().requestHandler(router).listen(8080);
-	}
+        PreparedStatement preparedStmt = null;
+        boolean isExist = false;
+        try {
+            preparedStmt = dbConnection.prepareStatement("SELECT * FROM rules WHERE rule_id=?");
 
-	private void handlePutRole(RoutingContext rc) {
+            preparedStmt.setString(1, rule.getId());
+            ResultSet rs = preparedStmt.executeQuery();
 
-		SQLConnection conn = rc.get("conn");
+            if (rs.next()) {
+                isExist = true;
+            }
 
-		// This handler will be called for every request
-		HttpServerResponse response = rc.response();
-		response.putHeader("content-type", "application/xml");
+            preparedStmt.close();
+            rs.close();
 
-		// Gelen http isteğindeki xml ifadeyi string olarak alıyoruz
-		String body = rc.getBodyAsString();
+            if (isExist) {
 
-		if (body == null) {
-			rc.response().setStatusCode(400).end("<result id='23'>false</result>");
-			return;
-		}
+                rc.response().setStatusCode(200).end("E");
+                return;
+            }
 
-		// Cache'den sistemin durum durmadığı kontrol edilir.
+            preparedStmt = dbConnection.prepareStatement("INSERT INTO rules (rule_id, clause, relatives) VALUES (?, ?, ?)");
 
-		// String olarak almış olduğumuz xml ifadeyi parse edilmesi için rule objemize veriyoruz.
-		Rule rule = new Rule();
-		try {
-			rule.setFromXML(body);
-			System.out.println(rule);
-		} catch (ParserConfigurationException | IOException | SAXException e) {
-			e.printStackTrace();
-			rc.response().setStatusCode(400).end("<result id='24'>false</result>");
-			return;
-		}
+            preparedStmt.setString(1, rule.getId());
+            preparedStmt.setString(2, rule.getClause());
+            preparedStmt.setString(3, rule.getRelatives());
 
-		Business business = new Business();
-		final String result = business.firstCheck(rule.getClause(), rule.getRelatives());
-		System.out.println(rule.getRelatives());
-		System.out.println(result);
-		if (!result.equals("true")) {
-			rc.response().setStatusCode(400).end("<result id='24'>" + result + "</result>");
-			return;
-		}
+            String query = ((JDBC4PreparedStatement) preparedStmt).asSql();
+            preparedStmt.executeUpdate(query, RETURN_GENERATED_KEYS);
+            rs = preparedStmt.getGeneratedKeys();
 
-		String queryCheck = "SELECT * FROM public.rules WHERE rule_id = ?";
-		JsonArray queryCheckParams = new JsonArray();
-		queryCheckParams.add(rule.getId());
-		conn.queryWithParams(queryCheck, queryCheckParams, resCheck -> {
-//			System.out.println(resCheck.result().getRows());
-// qgXPHS6Zx1fojgDi javafx.util.Pair
+            boolean completed = false;
 
-			// Veri db'ye daa önce kaydedilmişse.
-			if (resCheck.result().getRows().size() != 0) {
-				rc.response().setStatusCode(200).end("<result>exist</result>");
-			} else {
-				String queryInsert = "INSERT INTO public.rules (rule_id, clause, relatives) VALUES (?, ?, ?)";
-				JsonArray queryInsertParams = new JsonArray();
-				queryInsertParams.add(rule.getId());
-				queryInsertParams.add(rule.getClause());
-				queryInsertParams.add(rule.getRelatives());
+            if (rs.next())
+                completed = true;
 
-				conn.queryWithParams(queryInsert, queryInsertParams, resInsert -> {
-					if (resInsert.succeeded()) {
-						// Success!
-						rc.response().setStatusCode(201).end("<result>true</result>");
-					} else {
-						// Failed!
-						rc.response().setStatusCode(400).end("<result id='25'>false</result>");
-					}
-				});
-			}
-		});
+            preparedStmt.close();
 
-	}
+            if (completed) {
+                // Success!
+                rc.response().setStatusCode(201).end("T");
+            } else {
+                // Failed!
+                rc.response().setStatusCode(400).end("F");
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
 
-	private void handlePutAnswer(RoutingContext rc) {
-		SQLConnection conn = rc.get("conn");
 
-		// This handler will be called for every request
-		HttpServerResponse response = rc.response();
-		response.putHeader("content-type", "application/xml");
+    }
 
-		// Gelen http isteğindeki xml ifadeyi string olarak alıyoruz
-		String body = rc.getBodyAsString();
+    private void handlePutAnswer(RoutingContext rc) {
 
-		if (body == null) {
-			rc.response().setStatusCode(400).end("<result>false</result>");
-			return;
-		}
+        // This handler will be called for every request
+        HttpServerResponse response = rc.response();
+        response.putHeader("content-type", "application/xml");
 
-		// String olarak almış olduğumuz xml ifadeyi parse edilmesi için answer objemize veriyoruz.
-		Response resp = new Response();
-		try {
-			resp.setFromXML(body);
-		} catch (ParserConfigurationException | IOException | SAXException e) {
-			e.printStackTrace();
-			rc.response().setStatusCode(400).end("<result id='45'>false</result>"); // TODO: false yapılacak
-			return;
-		}
+        // Gelen http isteğindeki xml ifadeyi string olarak alıyoruz
+        String body = rc.getBodyAsString();
 
-		System.out.println(resp); // Checkpoint
+        if (body == null) {
+            rc.response().setStatusCode(400).end("F");
+            return;
+        }
 
-		JsonArray params = new JsonArray();
-		params.add(resp.getRuleID());
-		params.add(resp.getUserID());
-		params.add(resp.getAnswer());
+        // String olarak almış olduğumuz xml ifadeyi parse edilmesi için answer objemize veriyoruz.
+        Response resp = new Response();
+        try {
+            resp.setFromXML(body);
+        } catch (ParserConfigurationException | IOException | SAXException e) {
+            e.printStackTrace();
+            rc.response().setStatusCode(400).end("T"); // TODO: false yapılacak
+            return;
+        }
 
-		JsonArray paramsForGetAnswers = new JsonArray();
-		paramsForGetAnswers.add(resp.getRuleID());
+        System.out.println(resp); // Checkpoint
 
-		String query = "INSERT INTO public.responses (rule_id, user_id, answer) VALUES (?, ?, ?)";
-		conn.queryWithParams(query, params, resInsert -> {
-			if (resInsert.succeeded()) {
+        PreparedStatement preparedStmt;
+        ResultSet rs;
+        boolean completed = false;
+        try {
+            preparedStmt = dbConnection.prepareStatement("INSERT INTO responses (rule_id, user_id, answer) VALUES (?, ?, ?)");
+            preparedStmt.setString(1, resp.getRuleID());
+            preparedStmt.setString(2, resp.getUserID());
+            preparedStmt.setString(3, resp.getAnswer());
+            String query = ((JDBC4PreparedStatement) preparedStmt).asSql();
+            preparedStmt.executeUpdate(query, RETURN_GENERATED_KEYS);
+            rs = preparedStmt.getGeneratedKeys();
+            if (rs.next())
+                completed = true;
+            preparedStmt.close();
 
-				// Tüm cevaplar db'den çekilecek.
-				String queryGetAllResponses = "SELECT rule_id, user_id, answer FROM public.responses WHERE rule_id = ?";
-				conn.queryWithParams(queryGetAllResponses, paramsForGetAnswers, resGetAnsAll -> {
-					System.out.println("Rule: " + resGetAnsAll.result().getRows().get(0).toString());
-					if (resGetAnsAll.succeeded()) {
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
 
-						// Rule db'den çekilecek.
-						String queryGetRule = "SELECT rule_id, clause, relatives FROM public.rules WHERE rule_id = ? LIMIT 1";
-						conn.queryWithParams(queryGetRule, paramsForGetAnswers, resGetRule -> {
-							if (resGetRule.succeeded()) {
 
-								JsonObject rule = resGetRule.result().getRows().get(0); // OK
-								List<JsonObject> responses = resGetAnsAll.result().getRows();
-								System.out.println(responses); // Checkpoint responses
+        ResultSet answerSet;
+        ResultSet ruleSet;
+        if (completed) {
+            try {
+                PreparedStatement psanswer;
+                psanswer = dbConnection.prepareStatement("SELECT rule_id, user_id, answer FROM responses WHERE rule_id = ? AND Id IN(SELECT MAX(Id) FROM responses GROUP BY user_id)");
+                psanswer.setString(1, resp.getRuleID());
+                answerSet = psanswer.executeQuery();
 
-								// Calculation.
-								Business business = new Business();
 
-								String result = "f";
-								for (JsonObject rsp : responses) {
-									System.out.println(rsp); // Checkpoint response
-									business.rule = rule.getString("clause");
 
-									String userID = rsp.getString("user_id");
-									String answer = rsp.getString("answer");
-									String ruleID = rsp.getString("rule_id");
+                preparedStmt = dbConnection.prepareStatement("SELECT rule_id, clause, relatives FROM rules WHERE rule_id = ? LIMIT 1");
+                preparedStmt.setString(1, resp.getRuleID());
+                ruleSet = preparedStmt.executeQuery();
 
-									result = business.solver(userID, answer);
-									rules.put(ruleID, business.rule);
+                // Calculation.
+                Business business = new Business();
+                String result = "f";
+                ruleSet.next();
+                business.rule = ruleSet.getString("clause");
 
-									System.out.println(result);
-									System.out.println(business.rule);
-								}
+                while (answerSet.next()) {
+                    String rule_id = answerSet.getString("rule_id");
+                    String user_id = answerSet.getString("user_id");
+                    String answer = answerSet.getString("answer");
+                    result = business.solver(user_id, answer);
+                    System.out.println(result);
+                    System.out.println(business.rule);
 
-								rc.response().setStatusCode(200).end("<result>" + result + "</result>");
-								return;
-							} else {
-								// DB'den tüm veriler çekilemedi demektir.
-								rc.response().setStatusCode(500).end("<result>false</result>");
-								return;
-							}
-						});
-					} else {
-						// DB'den tüm veriler çekilemedi demektir.
-						rc.response().setStatusCode(500).end("<result>false</result>");
-						return;
-					}
-				});
+                }
+                preparedStmt.close();
+                psanswer.close();
+                //answerSet.close();
+                //ruleSet.close();
 
-			} else {
-				// Failed!
-				rc.response().setStatusCode(400).end("<result>false</result>");
-				return;
-			}
-		});
-	}
+                rc.response().setStatusCode(200).end(  result );
+                return;
 
+
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+
+        }
+        // DB'den tüm veriler çekilemedi demektir.
+        rc.response().setStatusCode(500).end("F");
+    }
+
+    /**
+     *
+     * @param args
+     */
+    public static void main(String[] args) {
+        Vertx vertx = Vertx.vertx();
+        vertx.deployVerticle(new Server());
+    }
 }
